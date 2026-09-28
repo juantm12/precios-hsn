@@ -651,18 +651,23 @@
     } catch (e) { return null; }
   }
 
+  // La API de GitHub da siempre la última versión (hasta 60 lecturas por hora). Si se agotan, el enlace
+  // directo del gist, que puede ir hasta 5 minutos por detrás.
   async function leeGist(id) {
+    try {
+      const r = await fetch(`https://api.github.com/gists/${id}`, { cache: 'no-store' });
+      if (r.ok) {
+        const f = (await r.json()).files['web.json'];
+        if (!f.truncated) return JSON.parse(f.content);
+        const completo = await fetch(f.raw_url, { cache: 'no-store' });  // lleva la versión: nunca va retrasado
+        if (completo.ok) return await completo.json();
+      }
+    } catch (e) { /* se prueba con el enlace directo */ }
     const usuario = location.hostname.endsWith('.github.io') ? location.hostname.split('.')[0] : null;
-    if (usuario) {
-      try {
-        const r = await fetch(`https://gist.githubusercontent.com/${usuario}/${id}/raw/web.json?t=${Date.now()}`,
-                              { cache: 'no-store' });
-        if (r.ok) return await r.json();
-      } catch (e) { /* se prueba con la API */ }
-    }
-    const r = await fetch(`https://api.github.com/gists/${id}`, { cache: 'no-store' });
+    if (!usuario) throw new Error('sin conexión con GitHub');
+    const r = await fetch(`https://gist.githubusercontent.com/${usuario}/${id}/raw/web.json`, { cache: 'no-store' });
     if (!r.ok) throw new Error('error ' + r.status);
-    return JSON.parse((await r.json()).files['web.json'].content);
+    return await r.json();
   }
 
   let ultimaLectura = 0;
