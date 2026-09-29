@@ -1,0 +1,45 @@
+name: Precios diarios
+on:
+  schedule:
+    - cron: "5 8 * * *"  # 10:05 en horario de verano
+    - cron: "5 9 * * *"  # 10:05 en horario de invierno (solo se consulta una vez al día)
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: precios
+jobs:
+  consulta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Comprobar la llave
+        env:
+          GH_TOKEN: ${{ secrets.HSN }}
+        run: |
+          cabeceras=$(curl -sI -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/gists | tr -d '\r')
+          estado=$(echo "$cabeceras" | head -1 | cut -d' ' -f2)
+          if [ "$estado" != "200" ]; then echo "::error::La llave HSN no funciona (HTTP $estado)"; exit 1; fi
+          echo "Permisos de la llave: $(echo "$cabeceras" | grep -i '^x-oauth-scopes:' | cut -d' ' -f2-)"
+          caduca=$(echo "$cabeceras" | grep -i '^github-authentication-token-expiration:' | cut -d' ' -f2-)
+          echo "La llave caduca: ${caduca:-nunca}"
+      - name: Consultar HSN y guardar los precios en el gist
+        env:
+          TZ: Europe/Madrid
+          GH_TOKEN: ${{ secrets.HSN }}
+          ID_GIST: ${{ secrets.ID_GIST }}
+          DIARIA: ${{ github.event_name == 'schedule' && '--diaria' || '' }}
+        run: python3 hsn_precios.py --nube $DIARIA
+      - name: Mantener activa la consulta diaria
+        if: github.event_name == 'schedule'
+        run: |
+          # GitHub apaga las tareas programadas de un repo sin cambios en 60 días.
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 40 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            date -u +%Y-%m-%dT%H:%M:%SZ > ultima-ejecucion.txt
+            git add ultima-ejecucion.txt
+            git commit -m "Mantiene activa la consulta diaria"
+            git push
+          fi
